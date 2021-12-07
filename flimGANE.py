@@ -1,17 +1,18 @@
 """
-@author: NinaYIC
+Editor: Nina Chen
+Final version
+Main code for flimGANE training and testing for FLIM
+11/10/2021
+
 """
 
-
 #%% Import required modules
-# Import required modules
 import os
 import numpy as np                    # Fundamental package for scientific compouting
 import pandas as pd                   # For data manipulation and analysis
 import random                         # Used to generate random number
 import time
 from skimage import io
-from tqdm import tqdm_notebook as tqdm      # Show how much time left
 import tensorflow as tf               # For DNN model development (backend)
 import matplotlib.pyplot as plt       # To plot the figure    
 plt.rcParams.update({'font.size': 30, 'axes.linewidth': 5, 'axes.titlepad': 25,
@@ -26,19 +27,13 @@ from keras.models import Model, load_model  # For model development
 from keras.layers import Input, Dense, Lambda, Concatenate, Add
 from keras.layers import Conv1D, Reshape, AveragePooling1D, Flatten
 from keras.optimizers import Adam, RMSprop
-from tensorflow.compat.v1 import ConfigProto
-from tensorflow.compat.v1 import InteractiveSession
-config = tf.ConfigProto(allow_soft_placement=True)
-gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.7)
-#config = ConfigProto()
-config.gpu_options.allow_growth = True
-session = InteractiveSession(config=config)
 
 workdir = os.getcwd()
 res = 256
 version = 'release_1'
 savepath = workdir + "/Results/"
 
+#%% Define the functions to be utilized
 def generate_decay_histogram(IRF, A, tau1, tau2):
     '''
     This function is to simulate a single time decay histogram.
@@ -93,8 +88,8 @@ def generate_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, n_samples=100000, disp
 def generate_training_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, n_samples=100000):
     realinput, fakeinput, irf, A, tau1, tau2 = generate_data(Xtrain, IRF, FLIMA, FLIMTau1, 
                                                    FLIMTau2, n_samples=n_samples, display=False)
-    valid = np.ones((realinput.shape[0], 1))
-    fake  = np.zeros((realinput.shape[0], 1))
+    valid = -np.ones((realinput.shape[0], 1))
+    fake  = np.ones((realinput.shape[0], 1))
     return realinput, fakeinput, valid, fake, irf, A, tau1, tau2
 
 def generate_flimGANEtraining_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, n_samples=100000):
@@ -140,7 +135,7 @@ def get_discriminative(D_in_decay):
     decay = Dense(128, activation='sigmoid')(D_in_decay)
     D_out =  Dense(64, activation='sigmoid')(decay)
     D_out =  Dense(8, activation='sigmoid')(D_out)
-    D_out =  Dense(1, activation='sigmoid')(D_out)
+    D_out =  Dense(1)(D_out)
     D = Model(inputs=D_in_decay, outputs=D_out)
     D.compile(loss=wasserstein_loss, 
               optimizer=RMSprop(lr=0.00005),
@@ -217,287 +212,264 @@ def sample_images(realinput, fakeinput, irf, epoch, G, r, c):
     fig.savefig(saveFolder + "/decayHistogram_%d.png" % epoch)
     plt.close()
 
-#%% Identify the (simulation/training) file path and import the data
-def train_flimGANE_GD():
-    # Load the data set (This data is simulated based on IRF experiments for each pixel)
-    sim_filename = '/Simulation_version2_hela_090_500_100dups_test.pkl'
-    dataset = pd.read_pickle(workdir + sim_filename)
-    res = 256
-    Xtrain = np.reshape(dataset['TimeDecayHistogram'][0], (-1, res))
-    IRF = np.reshape(dataset['IRF'][0], (-1, res))
-    FLIMA = np.reshape(dataset['FLIM_A'][0], (-1, 1))
-    FLIMTau1 = np.reshape(dataset['FLIM_tau1'][0], (-1, 1))
-    FLIMTau2 = np.reshape(dataset['FLIM_tau2'][0], (-1, 1))
-    for i in range(np.shape(IRF)[0]):
-        IRF[i, :] = IRF[i, :]/np.max(IRF[i, :])
-    
-    # Create the generator model
-    G_in_decay = Input(shape=(res, ))
-    G_in_irf = Input(shape=(res, ))  
-    G, G_out = get_generative(G_in_decay, G_in_irf)
-    G.summary()
-    
-    # Create the discriminative model
-    D_in_decay = Input(shape=(res, ))
-    D, D_out = get_discriminative(D_in_decay)
-    D.summary()
-    
-    # Chained model (Combine generator and discriminator together)
-    GAN_in_decay = Input(shape=(res, ))
-    GAN_in_irf = Input(shape=(res, ))  
-    GAN, GAN_out, generator_model = make_gan(GAN_in_decay, GAN_in_irf, G, D)
-    GAN.summary()
-    
-    #%% Train the model
-    verbose = True
-    v_freq = 50
-    epochs = 2000
-    d_loss = []
-    d_val  = []
-    g_loss = []
-    g_val  = []
-    generator_loss = []
-    n_critic = 5
-    clip_value = 0.01
-    e_range= range(epochs)
-    
-    r, c = 3, 3
-    n_images = r * c
-    realinput_demo, fakeinput_demo, valid_demo, fake_demo, irf_demo, A_demo, tau1_demo, tau2_demo = generate_training_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, n_images)
-    
-    saveFolder = workdir + "/Results/ver_" + version 
-    if not os.path.exists(saveFolder):
-        os.makedirs(saveFolder)
-    np.save(saveFolder + "/realinput_demo.npy", realinput_demo) 
-    np.save(saveFolder + '/fakeinput_demo.npy', fakeinput_demo)
-    np.save(saveFolder + '/irf_demo.npy', irf_demo) 
-    np.save(saveFolder + '/A_demo.npy', A_demo) 
-    np.save(saveFolder + '/tau1_demo.npy', tau1_demo)
-    np.save(saveFolder + '/tau2_demo.npy', tau2_demo) 
-    
-    
-    for epoch in e_range:
-        
-        print("Epoch #" + str(epoch+1) + " .......")
-        
-        for _ in range(n_critic):
-    
-            # -------------------------
-            #   Train Discriminator
-            # -------------------------
-        
-            realinput, fakeinput, valid, fake, irf, A, tau1, tau2 = generate_training_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, 14000)
-            
-            imgs = realinput
-            
-            gen_imgs = G.predict([fakeinput, irf])
-            
-            d_loss_real = D.train_on_batch(imgs, valid)
-            d_loss_fake = D.train_on_batch(gen_imgs, fake)
-            d_loss_ = 0.5 * np.add(d_loss_real, d_loss_fake)
-            for l in D.layers:
-                weights = l.get_weights()
-                weights = [np.clip(w, -clip_value, clip_value) for w in weights]
-                l.set_weights(weights)
-            d_loss.append(d_loss_)
-        
-        # -------------------------
-        #   Train Generator
-        # -------------------------
-        
-        g_loss.append(generator_model.train_on_batch([fakeinput, irf], [valid, imgs]))
-        
-        generator_loss.append(G.test_on_batch([fakeinput, irf], imgs))
-        
-        realinput_val, fakeinput_val, valid_val, fake_val, irf_val, Af_val, tau1f_val, tau2f_val = generate_training_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, 1400)  # Obtain the data for validation
-        imgs = realinput_val
-        gen_imgs = G.predict([fakeinput_val, irf_val])
-        d_loss_real_val = D.test_on_batch(imgs, valid_val)
-        d_loss_fake_val = D.test_on_batch(gen_imgs, fake_val)
-        d_loss_val = 0.5 * np.add(d_loss_real_val, d_loss_fake_val)
-        d_val.append(d_loss_val)
-        
-        g_val.append(GAN.test_on_batch([fakeinput_val, irf_val], valid_val))
-        
-        if verbose and (epoch+1) % v_freq == 0:  # Show current progress for certain epochs
-            print("Epoch #{}: Generative Loss: {}, Discriminative Loss: {}".format(epoch+1, g_loss[-1], d_loss[-1]))
-            print("Epoch #{}: Generative TestLoss: {}, Discriminative TestLoss: {}".format(epoch+1, g_val[-1], d_val[-1]))
-            print("Epoch #{}: Generator's Loss: {}".format(epoch+1, generator_loss[-1]))
-    
-        if epoch % v_freq == 0:
-            sample_images(realinput_demo, fakeinput_demo, irf_demo, epoch, G, r, c)
-            
-        if (epoch+1) % 100 == 0:
-            # Save the model and results
-            G_name = 'WGAN_G_model_ver' + version + '_epoch' + str(epoch+1) + '.h5' 
-            D_name = 'WGAN_D_model_ver' + version + '_epoch' + str(epoch+1) + '.h5' 
-            GAN_name = 'WGAN_model_ver' + version + '_epoch' + str(epoch+1) + '.h5' 
-            G.save(savepath + G_name) 
-            D.save(savepath + D_name) 
-            GAN.save(savepath + GAN_name)
-            np.save(savepath + 'g_loss_ver' + version + '_epoch' + str(epoch+1) + '.npy', g_loss) 
-            np.save(savepath + 'd_loss_ver' + version + '_epoch' + str(epoch+1) + '.npy', d_loss)
-            np.save(savepath + 'g_valloss_ver' + version + '_epoch' + str(epoch+1) + '.npy', g_val) 
-            np.save(savepath + 'd_valloss_ver' + version + '_epoch' + str(epoch+1) + '.npy', d_val)
-            np.save(savepath + 'generator_loss_ver' + version + '_epoch' + str(epoch+1) + '.npy', generator_loss)
-    
-    # Save the model and results
-    G_name = 'WGAN_G_model_ver' + version + '.h5' 
-    D_name = 'WGAN_D_model_ver' + version + '.h5' 
-    GAN_name = 'WGAN_model_ver' + version + '.h5' 
-    G.save(savepath + G_name) 
-    D.save(savepath + D_name) 
-    GAN.save(savepath + GAN_name)
-    np.save(savepath + 'g_loss_ver' + version + '.npy', g_loss) 
-    np.save(savepath + 'd_loss_ver' + version + '.npy', d_loss)
-    np.save(savepath + 'g_valloss_ver' + version + '.npy', g_val) 
-    np.save(savepath + 'd_valloss_ver' + version + '.npy', d_val)
-    np.save(savepath + 'generator_loss_ver' + version + '.npy', generator_loss)
-    return G, D, GAN
+#%% Main code start here
 
-#%% Identify the (simulation/training) file path and import the data
-def train_flimGANE_E():
-    irfFileName = '/irf.tif'
-    irf = io.imread(workdir + irfFileName)
-    avgIRF = np.sum(np.sum(irf, axis=1), axis=1)
-    avgIRF = avgIRF / np.max(avgIRF)
-    tau1s = np.linspace(0.9, 5.0, 42)
-    tau2s = [0.5]
-    alphas = [0.98, 0.99, 1.00]
-    n_decays = len(tau1s) * len(tau2s) * len(alphas)
-    histograms = np.zeros((n_decays, res))
-    IRF = np.zeros((n_decays, res))
-    FLIMA = np.zeros((n_decays,))
-    FLIMtau1 = np.zeros((n_decays,))
-    FLIMtau2 = np.zeros((n_decays,))
-    it = 0
-    for tau1 in tau1s:
-        for tau2 in tau2s:
-            for alpha in alphas:
-                histograms[it, :] = generate_decay_histogram(avgIRF, alpha, tau1, tau2)
-                IRF[it, :] = avgIRF
-                FLIMA[it] = alpha
-                FLIMtau1[it] = tau1
-                FLIMtau2[it] = tau2            
-                it += 1
-                
-    #%% Create the discriminative model
-    E_in_decay = Input(shape=(res, ))
-    E_in_irf = Input(shape=(res, ))  
-    E, E_out = get_estimative(E_in_decay, E_in_irf)
-    E.summary()
-    
-    #%% Train the model
-    e_loss = []
-    epochs = 5000
-    verbose = True
-    v_freq = 10
-    
-    tic = time.clock()
-    for epoch in range(epochs):
-        print("Epoch #{}.......".format(epoch+1))    
-        e_loss.append(E.train_on_batch([histograms, IRF], [FLIMA, FLIMtau1, FLIMtau2]))
-        if verbose and (epoch+1) % v_freq == 0:  # Show current progress for certain epochs
-            print("Epoch #{}: Discriminative Loss: {}".format(epoch+1, e_loss[-1]))
-    toc = time.clock()
-    elapseTime = toc = tic
-    
-    # Assign the version to be saved and save the results
-    ax = pd.DataFrame(
-            {
-                    'Estimative Loss': np.array(e_loss)[:, 0],
-            }
-    ).plot(title='Training loss', logy=True)   # Plot the loss to the same figure
-    ax.set_xlabel('Epochs')    # Set x label as "Epochs"
-    ax.set_ylabel('Loss')      # Set y label as "Loss"
-    savepath = workdir + "/Results/"
-    E_name = 'E_model_ver' + version + '.h5' 
-    E.save(savepath + E_name) 
-    np.save(savepath + 'e_loss_ver' + version + '.npy', e_loss)
-    return E
+#%% Start with generative model training
+# Load the data set (This data is simulated based on IRF experiments for each pixel)
+sim_filename = '/Simulation_version2_hela_090_500_100dups_test.pkl'
+dataset = pd.read_pickle(workdir + sim_filename)
+res = 256
+Xtrain = np.reshape(dataset['TimeDecayHistogram'][0], (-1, res))
+IRF = np.reshape(dataset['IRF'][0], (-1, res))
+FLIMA = np.reshape(dataset['FLIM_A'][0], (-1, 1))
+FLIMTau1 = np.reshape(dataset['FLIM_tau1'][0], (-1, 1))
+FLIMTau2 = np.reshape(dataset['FLIM_tau2'][0], (-1, 1))
+for i in range(np.shape(IRF)[0]):
+    IRF[i, :] = IRF[i, :]/np.max(IRF[i, :])
 
-#%% Identify the (simulation/training) file path and import the data
-def train_flimGANE(G, E):
-    sim_filename = '/Simulation_version2_hela_090_500_100dups_test.pkl'
-    dataset = pd.read_pickle(workdir + sim_filename)
-    res = 256
-    Xtrain = np.reshape(dataset['TimeDecayHistogram'][0], (-1, res))
-    IRF = np.reshape(dataset['IRF'][0], (-1, res))
-    FLIMA = np.reshape(dataset['FLIM_A'][0], (-1, 1))
-    FLIMTau1 = np.reshape(dataset['FLIM_tau1'][0], (-1, 1))
-    FLIMTau2 = np.reshape(dataset['FLIM_tau2'][0], (-1, 1))
-    for i in range(np.shape(IRF)[0]):
-        IRF[i, :] = IRF[i, :]/np.max(IRF[i, :])
+# Create the generator model
+G_in_decay = Input(shape=(res, ))
+G_in_irf = Input(shape=(res, ))  
+G, G_out = get_generative(G_in_decay, G_in_irf)
+G.summary()
+
+# Create the discriminative model
+D_in_decay = Input(shape=(res, ))
+D, D_out = get_discriminative(D_in_decay)
+D.summary()
+
+# Chained model (Combine generator and discriminator together)
+GAN_in_decay = Input(shape=(res, ))
+GAN_in_irf = Input(shape=(res, ))  
+GAN, GAN_out, generator_model = make_gan(GAN_in_decay, GAN_in_irf, G, D)
+generator_model.summary()
+
+# Assign training parameters
+verbose = True
+v_freq = 50
+epochs = 2000
+d_loss = []
+g_loss = []
+generator_loss = []
+n_critic = 5
+clip_value = 0.01
+e_range= range(epochs)
+
+r, c = 3, 3
+n_images = r * c
+realinput_demo, fakeinput_demo, valid_demo, fake_demo, irf_demo, A_demo, tau1_demo, tau2_demo = generate_training_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, n_images)
+# Create the new folder if not existed
+saveFolder = workdir + "/Results/ver_" + version 
+if not os.path.exists(saveFolder):
+    os.makedirs(saveFolder)
+# Save what are the selected simulated dataset from demo
+np.save(saveFolder + "/realinput_demo.npy", realinput_demo) 
+np.save(saveFolder + '/fakeinput_demo.npy', fakeinput_demo)
+np.save(saveFolder + '/irf_demo.npy', irf_demo) 
+np.save(saveFolder + '/A_demo.npy', A_demo) 
+np.save(saveFolder + '/tau1_demo.npy', tau1_demo)
+np.save(saveFolder + '/tau2_demo.npy', tau2_demo) 
+
+# Train the model
+for epoch in e_range:
     
-    #%% Load the model
-    E.name = 'model_2_new'
+    print("Epoch #" + str(epoch+1) + " .......")
     
-    #%% Chained model (Combine generator and discriminator together)
-    GAN_in_decay = Input(shape=(res, ))
-    GAN_in_irf = Input(shape=(res, ))  
-    flimGANE, flimGANE_out = make_flimGANE(GAN_in_decay, GAN_in_irf, G, E)
-    flimGANE.summary()
+    for _ in range(n_critic):
+
+        # -------------------------
+        #   Train Discriminator
+        # -------------------------
     
-    #%% Train the model
-    epochs = 500
-    n_crit = 100 
-    gan_loss = []
-    gan_val  = []
-    e_range= range(epochs)
-    valid_ind = random.sample(list(range(Xtrain.shape[0])),  int(Xtrain.shape[0]*0.1))
-    train_ind = [i for i in range(Xtrain.shape[0]) if i not in valid_ind]
-    A_valid = FLIMA[valid_ind]
-    tau1_valid = FLIMTau1[valid_ind]
-    tau2_valid = FLIMTau2[valid_ind]
-    irf_valid  = IRF[valid_ind, :]
-    X_valid    = Xtrain[valid_ind, :]
-    A_train = FLIMA[train_ind]
-    tau1_train = FLIMTau1[train_ind]
-    tau2_train = FLIMTau2[train_ind]
-    irf_train  = IRF[train_ind, :]
-    X_train_train    = Xtrain[train_ind, :]    
-    tic = time.clock()
-    for epoch in e_range:
+        realinput, fakeinput, valid, fake, irf, A, tau1, tau2 = generate_training_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, 14000)
         
-        print("Epoch #" + str(epoch+1) + " .......")
-        fakeinput, irf, A, tau1, tau2 = generate_flimGANEtraining_data(X_train_train, irf_train, 
-                                                               A_train, tau1_train, tau2_train,
-                                                               int(X_train_train.shape[0]*0.25))
-    
-        for crit in range(n_crit):
+        imgs = realinput
         
-            loss = flimGANE.train_on_batch([fakeinput, irf], [A, tau1, tau2])
-            gan_loss.append(loss)
-            
-            loss_test = flimGANE.test_on_batch([X_valid, irf_valid], [A_valid, tau1_valid, tau2_valid])
-            gan_val.append(loss_test)
-            
-            print("Epoch #{}-{}: Generative Loss: {}".format(epoch+1, crit+1, gan_loss[-1]))
-            print("Epoch #{}-{}: Generative TestLoss: {}".format(epoch+1, crit+1, gan_val[-1]))
-                  
-        G_name = '/flimGANE_G_model_ver' + version + '_iter_' + str(epoch) + '.h5' 
-        E_name = '/flimGANE_E_model_ver' + version + '_iter_' + str(epoch) + '.h5' 
-        flimGANE_name = '/flimGANE_model_ver' + version + '_iter_' + str(epoch) + '.h5' 
+        gen_imgs = G.predict([fakeinput, irf])
+        
+        d_loss_real = D.train_on_batch(imgs, valid)
+        d_loss_fake = D.train_on_batch(gen_imgs, fake)
+        d_loss_ = 0.5 * np.add(d_loss_real, d_loss_fake)
+        for l in D.layers:
+            weights = l.get_weights()
+            weights = [np.clip(w, -clip_value, clip_value) for w in weights]
+            l.set_weights(weights)
+        d_loss.append(d_loss_)
+    
+    # -------------------------
+    #   Train Generator
+    # -------------------------
+    
+    g_loss.append(generator_model.train_on_batch([fakeinput, irf], [valid, imgs]))
+    
+    generator_loss.append(G.test_on_batch([fakeinput, irf], imgs))
+        
+    if verbose and (epoch+1) % v_freq == 0:  # Show current progress for certain epochs
+        print("Epoch #{}: Generative Loss: {}, Discriminative Loss: {}".format(epoch+1, g_loss[-1], d_loss[-1]))
+        print("Epoch #{}: Generator's Loss: {}".format(epoch+1, generator_loss[-1]))
+
+    if epoch % v_freq == 0:
+        # Plot the demo and save the figure every v_freq epochs
+        sample_images(realinput_demo, fakeinput_demo, irf_demo, epoch, G, r, c)
+        
+    if (epoch+1) % 100 == 0:
+        # Save the model and results every 100 epochs
+        G_name = 'WGAN_G_model_ver' + version + '_epoch' + str(epoch+1) + '.h5' 
+        D_name = 'WGAN_D_model_ver' + version + '_epoch' + str(epoch+1) + '.h5' 
+        GAN_name = 'WGAN_model_ver' + version + '_epoch' + str(epoch+1) + '.h5' 
         G.save(savepath + G_name) 
-        E.save(savepath + E_name) 
-        flimGANE.save(savepath + flimGANE_name)
-        np.save(savepath + '/flimgane_g_loss_ver' + version + '_iter_' + str(epoch) + '.npy', gan_loss) 
-        np.save(savepath + '/flimgane_g_valloss_ver' + version + '_iter_' + str(epoch) + '.npy', gan_val) 
+        D.save(savepath + D_name) 
+        GAN.save(savepath + GAN_name)
+        np.save(savepath + 'g_loss_ver' + version + '_epoch' + str(epoch+1) + '.npy', g_loss) 
+        np.save(savepath + 'd_loss_ver' + version + '_epoch' + str(epoch+1) + '.npy', d_loss)
+        np.save(savepath + 'generator_loss_ver' + version + '_epoch' + str(epoch+1) + '.npy', generator_loss)
+
+# Save the model and results
+G_name = 'WGAN_G_model_ver' + version + '.h5' 
+D_name = 'WGAN_D_model_ver' + version + '.h5' 
+GAN_name = 'WGAN_model_ver' + version + '.h5' 
+G.save(savepath + G_name) 
+D.save(savepath + D_name) 
+GAN.save(savepath + GAN_name)
+np.save(savepath + 'g_loss_ver' + version + '.npy', g_loss) 
+np.save(savepath + 'd_loss_ver' + version + '.npy', d_loss)
+np.save(savepath + 'generator_loss_ver' + version + '.npy', generator_loss)
+
+#%% Start with estimative model training
+# Load the IRF --> avg and normalize
+irfFileName = '/irf.tif'
+irf = io.imread(workdir + irfFileName)
+avgIRF = np.sum(np.sum(irf, axis=1), axis=1)
+avgIRF = avgIRF / np.max(avgIRF)
+# Use the same simulation parameters as you did for the previous generative model training
+tau1s = np.linspace(0.9, 5.0, 42)
+tau2s = [0.5]
+alphas = [0.98, 0.99, 1.00]
+n_decays = len(tau1s) * len(tau2s) * len(alphas)
+histograms = np.zeros((n_decays, res))
+IRF = np.zeros((n_decays, res))
+FLIMA = np.zeros((n_decays,))
+FLIMtau1 = np.zeros((n_decays,))
+FLIMtau2 = np.zeros((n_decays,))
+it = 0
+for tau1 in tau1s:
+    for tau2 in tau2s:
+        for alpha in alphas:
+            histograms[it, :] = generate_decay_histogram(avgIRF, alpha, tau1, tau2)
+            IRF[it, :] = avgIRF
+            FLIMA[it] = alpha
+            FLIMtau1[it] = tau1
+            FLIMtau2[it] = tau2            
+            it += 1
+            
+# Create the discriminative model
+E_in_decay = Input(shape=(res, ))
+E_in_irf = Input(shape=(res, ))  
+E, E_out = get_estimative(E_in_decay, E_in_irf)
+E.summary()
+
+# Train the model
+e_loss = []
+epochs = 5000
+verbose = True
+v_freq = 10
+
+tic = time.clock()
+for epoch in range(epochs):
+    print("Epoch #{}.......".format(epoch+1))    
+    e_loss.append(E.train_on_batch([histograms, IRF], [FLIMA, FLIMtau1, FLIMtau2]))
+    if verbose and (epoch+1) % v_freq == 0:  # Show current progress for certain epochs
+        print("Epoch #{}: Discriminative Loss: {}".format(epoch+1, e_loss[-1]))
+toc = time.clock()
+elapseTime = toc = tic
+
+# Assign the version to be saved and save the results
+savepath = workdir + "/Results/"
+E_name = 'E_model_ver' + version + '.h5' 
+E.save(savepath + E_name) 
+np.save(savepath + 'e_loss_ver' + version + '.npy', e_loss)
+
+#%% Start flimGANE combinative training
+# First, load the dataset if you haven't
+sim_filename = '/Simulation_version2_hela_090_500_100dups_test.pkl'
+dataset = pd.read_pickle(workdir + sim_filename)
+res = 256
+Xtrain = np.reshape(dataset['TimeDecayHistogram'][0], (-1, res))
+IRF = np.reshape(dataset['IRF'][0], (-1, res))
+FLIMA = np.reshape(dataset['FLIM_A'][0], (-1, 1))
+FLIMTau1 = np.reshape(dataset['FLIM_tau1'][0], (-1, 1))
+FLIMTau2 = np.reshape(dataset['FLIM_tau2'][0], (-1, 1))
+for i in range(np.shape(IRF)[0]):
+    IRF[i, :] = IRF[i, :]/np.max(IRF[i, :])
+
+# Load the model
+G = load_model(workdir + '/Example_generator.h5', custom_objects=dict(wasserstein_loss=wasserstein_loss))
+E = load_model(workdir + '/Example_estimator.h5')
+E.name = 'model_2_new'
+
+# Chained model (Combine generator and discriminator together)
+GAN_in_decay = Input(shape=(res, ))
+GAN_in_irf = Input(shape=(res, ))  
+flimGANE, flimGANE_out = make_flimGANE(GAN_in_decay, GAN_in_irf, G, E)
+flimGANE.summary()
+
+# Train the model
+epochs = 500
+n_crit = 100 
+gan_loss = []
+gan_val  = []
+e_range= range(epochs)
+# Separate dataset into training and validation (with ratio of 9:1)
+valid_ind = random.sample(list(range(Xtrain.shape[0])),  int(Xtrain.shape[0]*0.1))
+train_ind = [i for i in range(Xtrain.shape[0]) if i not in valid_ind]
+A_valid = FLIMA[valid_ind]
+tau1_valid = FLIMTau1[valid_ind]
+tau2_valid = FLIMTau2[valid_ind]
+irf_valid  = IRF[valid_ind, :]
+X_valid    = Xtrain[valid_ind, :]
+A_train = FLIMA[train_ind]
+tau1_train = FLIMTau1[train_ind]
+tau2_train = FLIMTau2[train_ind]
+irf_train  = IRF[train_ind, :]
+X_train_train    = Xtrain[train_ind, :]   
+ 
+tic = time.clock()
+for epoch in e_range:
     
+    print("Epoch #" + str(epoch+1) + " .......")
+    fakeinput, irf, A, tau1, tau2 = generate_flimGANEtraining_data(X_train_train, irf_train, 
+                                                           A_train, tau1_train, tau2_train,
+                                                           int(X_train_train.shape[0]*0.25))
+
+    for crit in range(n_crit):
     
-    toc = time.clock()
-    elapseTime = toc - tic
-    
-    # Save the model and results
-    G_name = 'flimGANE_G_model_ver' + version + '.h5' 
-    E_name = 'flimGANE_E_model_ver' + version + '.h5' 
-    flimGANE_name = 'flimGANE_model_ver' + version + '.h5' 
+        loss = flimGANE.train_on_batch([fakeinput, irf], [A, tau1, tau2])
+        gan_loss.append(loss)
+        
+        loss_test = flimGANE.test_on_batch([X_valid, irf_valid], [A_valid, tau1_valid, tau2_valid])
+        gan_val.append(loss_test)
+        
+        print("Epoch #{}-{}: Generative Loss: {}".format(epoch+1, crit+1, gan_loss[-1]))
+        print("Epoch #{}-{}: Generative TestLoss: {}".format(epoch+1, crit+1, gan_val[-1]))
+              
+    G_name = '/flimGANE_G_model_ver' + version + '_iter_' + str(epoch) + '.h5' 
+    E_name = '/flimGANE_E_model_ver' + version + '_iter_' + str(epoch) + '.h5' 
+    flimGANE_name = '/flimGANE_model_ver' + version + '_iter_' + str(epoch) + '.h5' 
     G.save(savepath + G_name) 
     E.save(savepath + E_name) 
     flimGANE.save(savepath + flimGANE_name)
-    np.save(savepath + 'flimgane_g_loss_ver' + version + '.npy', gan_loss) 
-    np.save(savepath + 'flimgane_g_valloss_ver' + version + '.npy', gan_val) 
+    np.save(savepath + '/flimgane_g_loss_ver' + version + '_iter_' + str(epoch) + '.npy', gan_loss) 
+    np.save(savepath + '/flimgane_g_valloss_ver' + version + '_iter_' + str(epoch) + '.npy', gan_val) 
 
+toc = time.clock()
+elapseTime = toc - tic
 
-#%%
-G, D, GAN = train_flimGANE_GD()
+# Save the model and results
+G_name = 'flimGANE_G_model_ver' + version + '.h5' 
+E_name = 'flimGANE_E_model_ver' + version + '.h5' 
+flimGANE_name = 'flimGANE_model_ver' + version + '.h5' 
+G.save(savepath + G_name) 
+E.save(savepath + E_name) 
+flimGANE.save(savepath + flimGANE_name)
+np.save(savepath + 'flimgane_g_loss_ver' + version + '.npy', gan_loss) 
+np.save(savepath + 'flimgane_g_valloss_ver' + version + '.npy', gan_val) 
