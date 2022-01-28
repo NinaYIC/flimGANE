@@ -273,10 +273,10 @@ def make_flimGANE(GAN_in_decay, GAN_in_irf, G, E):
         flimGANE       : GAN model
         flimGANE_out   : GAN output tensor
     '''
-    set_trainability(D, True)
+    set_trainability(E, True)
     set_trainability(G, False)
     x = G([GAN_in_decay, GAN_in_irf])
-    flimGANE_out = D([x, GAN_in_irf])
+    flimGANE_out = E([x, GAN_in_irf])
     flimGANE = Model([GAN_in_decay, GAN_in_irf], flimGANE_out)
     flimGANE.compile(loss='mse', optimizer='adam')
     return flimGANE, flimGANE_out
@@ -378,8 +378,6 @@ np.save(savepath + 'generator_loss_ver' + version + '.npy', generator_loss)
 #%% Start with estimative model training
 irfFileName = '/Example_IRF.tif'
 irf = io.imread(workdir + irfFileName)
-avgIRF = np.sum(np.sum(irf, axis=1), axis=1)
-avgIRF = avgIRF / np.max(avgIRF)
 # Use the same simulation parameters as you did for the previous generative model training
 tau1s = np.linspace(0.3, 6.0, 58)
 tau2s = [0.5]
@@ -394,8 +392,8 @@ it = 0
 for tau1 in tau1s:
     for tau2 in tau2s:
         for alpha in alphas:
-            histograms[it, :] = generate_decay_histogram(avgIRF, alpha, tau1, tau2)
-            IRF[it, :] = avgIRF
+            histograms[it, :] = generate_decay_histogram(irf, alpha, tau1, tau2)
+            IRF[it, :] = irf
             FLIMA[it] = alpha
             FLIMtau1[it] = tau1
             FLIMtau2[it] = tau2            
@@ -466,13 +464,13 @@ tau1_train = FLIMTau1[train_ind]
 tau2_train = FLIMTau2[train_ind]
 irf_train  = IRF[train_ind, :]
 X_train_train    = Xtrain[train_ind, :]   
- 
+
 for epoch in e_range:
     
     print("Epoch #" + str(epoch+1) + " .......")
     fakeinput, irf, A, tau1, tau2 = generate_flimGANEtraining_data(X_train_train, irf_train, 
-                                                           A_train, tau1_train, tau2_train,
-                                                           int(X_train_train.shape[0]*0.25))
+                                                          A_train, tau1_train, tau2_train,
+                                                          int(X_train_train.shape[0]*0.25))
 
     for crit in range(n_crit):
     
@@ -507,8 +505,6 @@ flimGANEfilename = workdir + "/flimGANE_model_ver_1.h5"
 
 # IRF
 irf = io.imread(irffilename)
-avgirf = np.mean(np.mean(irf, axis=1), axis=1)    
-avgirf = avgirf / np.max(avgirf)
     
 # Decay curve
 dataset = pd.read_pickle(decayfilename) 
@@ -523,7 +519,7 @@ flimGANE = load_model(flimGANEfilename,
 flimGANE_FLIM = np.zeros((14, 47))
 for dimx, dimy in itertools.product(range(14), range(47)):
     if intensity_[dimx, dimy] > 0:   
-        IRF  = np.reshape(avgirf, (-1, 256))
+        IRF  = np.reshape(irf, (-1, 256))
         data = decay_[dimx, dimy, :]
         data = data / max(data)
         data = np.reshape(data, (1, -1))
