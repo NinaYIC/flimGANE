@@ -12,7 +12,7 @@ The code is written in Python 3.6.5. You will also need:
 Getting started
 ----------------------------------------------------
 
-Before starting, you need to generate the Monte Carlo simulation dataset. The example simulation dataset can be found [here](10.6084/m9.figshare.19086368)! 
+Before starting, you need to generate the Monte Carlo simulation dataset. The example simulation dataset can be found [here](https://doi.org/10.6084/m9.figshare.19086368)! 
 
 Training a *flimGANE* model
 ----------------------------------------------------
