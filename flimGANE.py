@@ -499,41 +499,37 @@ np.save(savepath + 'flimgane_g_valloss_ver' + version + '.npy', gan_val)
 
 #%% flimGANE prediction
 # Load the dataset
-
 # ================================================================
 irffilename = workdir + "/Example_IRF.tif"
-decayfilename = workdir + "/Example_Decay.tif"
-flimGANEfilename = workdir + "/Example_flimGANE.h5"
+decayfilename = workdir + "/Example_Decay.pkl"
+flimGANEfilename = workdir + "/flimGANE_model_ver_1.h5"
 # ================================================================
 
 # IRF
 irf = io.imread(irffilename)
 avgirf = np.mean(np.mean(irf, axis=1), axis=1)    
 avgirf = avgirf / np.max(avgirf)
-dimx = irf.shape[1]
-dimy = irf.shape[2]  
-for dx, dy in itertools.product(range(dimx), range(dimy)):
-    irf[:, dx, dy] = avgirf
     
 # Decay curve
-decay_   = io.imread(decayfilename)
-intensity   = np.sum(decay_, axis=-1)
+dataset = pd.read_pickle(decayfilename) 
+decay_ = dataset['TimeDecayHistogram'][0]         
+intensity_ = np.sum(decay_, axis=-1)
 
 # flimGANE model
 flimGANE = load_model(flimGANEfilename, 
                       custom_objects=dict(wasserstein_loss=wasserstein_loss)) 
 
 # flimGANE prediction
-threshold = 0
-X = np.reshape(decay_, (res, -1))
-X = X.T
-IRF = np.reshape(irf, (res, -1))
-IRF = IRF.T
-prediction = flimGANE.predict([X, IRF])
-A, tau1, tau2 = prediction
-flimGANE_FLIM = A*tau1 + (1-A)*tau2
-flimGANE_FLIM = np.reshape(flimGANE_FLIM, (512, 512))
-flimGANE_FLIM[intensity < threshold] = 0
+flimGANE_FLIM = np.zeros((14, 47))
+for dimx, dimy in itertools.product(range(14), range(47)):
+    if intensity_[dimx, dimy] > 0:   
+        IRF  = np.reshape(avgirf, (-1, 256))
+        data = decay_[dimx, dimy, :]
+        data = data / max(data)
+        data = np.reshape(data, (1, -1))
+        
+        flimGANE_prediction = flimGANE.predict([data, IRF])
+        flimGANE_FLIM[dimx, dimy] = flimGANE_prediction[0]*flimGANE_prediction[1] + (1-flimGANE_prediction[0])*flimGANE_prediction[2]
 
 # Visualize the flimGANE result image
 fig, ax  = plt.subplots(figsize=(9, 9))
