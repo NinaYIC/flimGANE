@@ -435,8 +435,8 @@ for i in range(np.shape(IRF)[0]):
     IRF[i, :] = IRF[i, :]/np.max(IRF[i, :])
 
 # Load the model
-#G = load_model(workdir + '/Example_generator.h5', custom_objects=dict(wasserstein_loss=wasserstein_loss))
-#E = load_model(workdir + '/Example_estimator.h5')
+#G = load_model(workdir + '/WGAN_G_model_ver_1.h5', custom_objects=dict(wasserstein_loss=wasserstein_loss))
+#E = load_model(workdir + '/E_model_ver_1.h5')
 E.name = 'model_2_new'
 
 # Chained model (Combine generator and discriminator together)
