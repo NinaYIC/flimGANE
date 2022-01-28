@@ -8,29 +8,23 @@ Main code for flimGANE training and testing for FLIM
 
 #%% Import required modules
 import os
-import numpy as np                    # Fundamental package for scientific compouting
-import pandas as pd                   # For data manipulation and analysis
-import random                         # Used to generate random number
-import time
+import numpy as np                    
+import pandas as pd                   
+import random                         
+import itertools                    
+import matplotlib.pyplot as plt          
 from skimage import io
-import tensorflow as tf               # For DNN model development (backend)
-import matplotlib.pyplot as plt       # To plot the figure    
-plt.rcParams.update({'font.size': 30, 'axes.linewidth': 5, 'axes.titlepad': 25,
-                     'axes.labelsize': 'medium',  'axes.labelpad': 25,
-                     'figure.dpi': 100, 'savefig.dpi': 100, 
-                     'xtick.major.size': 15, 'xtick.major.width': 5,
-                     'xtick.major.pad': 20, 'xtick.direction': 'in',
-                     'ytick.major.size': 15, 'ytick.major.width': 5,
-                     'ytick.major.pad': 20, 'ytick.direction': 'in'})   
-from keras import backend as K        # For DNN model development (Keras)
-from keras.models import Model, load_model  # For model development
+from keras import backend as K        
+from keras.models import Model, load_model  
 from keras.layers import Input, Dense, Lambda, Concatenate, Add
 from keras.layers import Conv1D, Reshape, AveragePooling1D, Flatten
 from keras.optimizers import Adam, RMSprop
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-workdir = os.getcwd()
-res = 256
-version = 'release_1'
+workdir = os.getcwd() 
+tm = 50               # The range of decay histogram (e.g., 50 ns)
+res = 256             # Number of bins in decay histogram (e.g., 256 bins)
+version = '_1'
 savepath = workdir + "/Results/"
 
 #%% Define the functions to be utilized
@@ -39,13 +33,13 @@ def generate_decay_histogram(IRF, A, tau1, tau2):
     This function is to simulate a single time decay histogram.
     Input:
         IRF         : Instrument Response Function
-        A           : Fraction of longer lifetime
-        tau1        : long lifetime
-        tau2        : short lifetime
+        A           : Fraction of shorter lifetime
+        tau1        : short lifetime
+        tau2        : long lifetime
     Output:
-        simGroundTruthDecay : Ground truth decay curve after convolution
+        simGroundTruthDecay : Normalized ground truth decay curve after convolution
     '''
-    t = np.linspace(0, 50, res)
+    t = np.linspace(0, tm, res)
     component1 = A*np.exp(-t/tau1)
     component2 = (1-A)*np.exp(-t/tau2)
     exponentialDecay = component1+component2
@@ -55,61 +49,116 @@ def generate_decay_histogram(IRF, A, tau1, tau2):
 
 def generate_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, n_samples=100000, display=False):
     '''
-    This function is to generate the dataset for GAN model training
+    This function is to generate the ground-truth and simulated decay curve/histogram.
     Input:
-        Xtrain      : Simulated decay histogram
+        Xtrain      : Simulated decay histogram from MC simulation
         IRF         : Instrument Response Function
-        FLIMA       : Fraction of longer lifetime
-        FLIMtau1    : long lifetime
-        FLIMtau2    : short lifetime
+        FLIMA       : Fraction of shorter lifetime
+        FLIMtau1    : short lifetime
+        FLIMtau2    : long lifetime
+        n_samples   : number of samples
+        display     : display the string to show the current status or not
     Output:
-        real        : Smooth decay curve (clear inputs)
+        real        : Ground-truth decay curve (clear inputs)
         fake        : Simulated decay histogram (messy inputs)
         irf         : Instrument Response Function
-        A           : Fraction of longer lifetime
-        tau1        : long lifetime
-        tau2        : short lifetime
+        A           : Fraction of shorter lifetime
+        tau1        : short lifetime
+        tau2        : long lifetime
     '''
-    idx = random.sample(list(range(Xtrain.shape[0])),  n_samples)  # Obtain random indexes
+    idx = random.sample(list(range(Xtrain.shape[0])),  n_samples)  
     A = FLIMA[idx]
     tau1 = FLIMTau1[idx]
     tau2 = FLIMTau2[idx]
-    irf, real, fake = np.zeros([n_samples, 256]), np.zeros([n_samples, 256]), np.zeros([n_samples, 256])
+    irf, real, fake = np.zeros([n_samples, res]), np.zeros([n_samples, res]), np.zeros([n_samples, res])
     fake = Xtrain[idx, :]
     irf = IRF[idx, :]
     for ind in range(n_samples):
-        real[ind, :] = generate_decay_histogram(irf[ind, :], A[ind], tau1[ind], tau2[ind])   # Generate the smooth curve
+        real[ind, :] = generate_decay_histogram(irf[ind, :], A[ind], tau1[ind], tau2[ind])   
         if ind % (n_samples/10) == 0 and ind != 0 and display:
-            print(str(ind) + ' Samples Done!')    # Show the current status
+            print(str(ind) + ' Samples Done!')    
     if display:
         print(str(n_samples) + ' Samples Done!')    
     return real, fake, irf, A, tau1, tau2
 
 def generate_training_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, n_samples=100000):
-    realinput, fakeinput, irf, A, tau1, tau2 = generate_data(Xtrain, IRF, FLIMA, FLIMTau1, 
+    '''
+    This function is to generate the dataset for generative model training
+    Input:
+        Xtrain      : Simulated decay histogram
+        IRF         : Instrument Response Function
+        FLIMA       : Fraction of shorter lifetime
+        FLIMtau1    : short lifetime
+        FLIMtau2    : long lifetime
+        n_samples   : number of samples
+    Output:
+        real        : Ground-truth decay curve (clear inputs)
+        fake        : Simulated decay histogram (messy inputs)
+        real_label  : Label for ground-truth decay histogram
+        fake_label  : Label for simulated decay hiostogram
+        irf         : Instrument Response Function
+        A           : Fraction of shorter lifetime
+        tau1        : short lifetime
+        tau2        : long lifetime
+    '''
+    real, fake, irf, A, tau1, tau2 = generate_data(Xtrain, IRF, FLIMA, FLIMTau1, 
                                                    FLIMTau2, n_samples=n_samples, display=False)
-    valid = -np.ones((realinput.shape[0], 1))
-    fake  = np.ones((realinput.shape[0], 1))
-    return realinput, fakeinput, valid, fake, irf, A, tau1, tau2
+    real_label = -np.ones((real.shape[0], 1))
+    fake_label  = np.ones((real.shape[0], 1))
+    return real, fake, real_label, fake_label, irf, A, tau1, tau2
 
 def generate_flimGANEtraining_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, n_samples=100000):
-    realinput, fakeinput, irf, A, tau1, tau2 = generate_data(Xtrain, IRF, FLIMA, FLIMTau1, 
+    '''
+    This function is to generate the dataset for flimGANE G+E model training
+    Input:
+        Xtrain      : Simulated decay histogram
+        IRF         : Instrument Response Function
+        FLIMA       : Fraction of shorter lifetime
+        FLIMtau1    : short lifetime
+        FLIMtau2    : long lifetime
+        n_samples   : number of samples
+    Output:
+        fake        : Simulated decay histogram (messy inputs)
+        irf         : Instrument Response Function
+        A           : Fraction of shorter lifetime
+        tau1        : short lifetime
+        tau2        : long lifetime
+    '''
+    real, fake, irf, A, tau1, tau2 = generate_data(Xtrain, IRF, FLIMA, FLIMTau1, 
                                                    FLIMTau2, n_samples=n_samples, display=False)
-    return fakeinput, irf, A, tau1, tau2
+    return fake, irf, A, tau1, tau2
 
 def divide(tensors):
+    '''
+    This function is utilized to implement "Normalization" mathematical operation.
+    '''
     output = tensors
-    outputmax = K.max(output, axis=1, keepdims=True)
+    outputmax = K.max(output, axis=1, keepdims=True) 
     import tensorflow as tf
-    finalout = tf.math.divide(output, outputmax)
+    finalout = tf.math.divide(output, outputmax)     
     return finalout
 
 def wasserstein_loss(y_true, y_pred):
+    '''
+    This function defines the wasserstein loss for model training.
+    Input:
+        y_true : ground truth 
+        y_pred : model prediction
+    '''
     return K.mean(y_true * y_pred) 
 
 def get_generative(G_in_decay, G_in_irf):
-    G_in_decay_reshape = Reshape((256, 1))(G_in_decay)
-    G_in_irf_reshape   = Reshape((256, 1))(G_in_irf)
+    '''
+    This function generate the generative model.
+    Input:
+        G_in_decay : G input tensor for decay histogram
+        G_in_irf   : G input tensor for irf
+    Output:
+        G          : Generative model
+        G_out      : G output tensor
+    '''
+    G_in_decay_reshape = Reshape((res, 1))(G_in_decay)
+    G_in_irf_reshape   = Reshape((res, 1))(G_in_irf)
     decayImage = Concatenate(axis=2)([G_in_decay_reshape, G_in_irf_reshape])
     decayImageConv1 = Conv1D(16, 4, padding='same', activation='relu')(decayImage)
     decayImagePool1 = AveragePooling1D(pool_size=2)(decayImageConv1)
@@ -124,14 +173,22 @@ def get_generative(G_in_decay, G_in_irf):
     G_out_tau2  = Dense(1, activation='relu', name="Tau2_star")(attemptTau2)   
     G_out = Concatenate()([G_out_A, G_out_tau1, G_out_tau2])
     G_out = Dense(64, activation='sigmoid')(G_out)
-    G_out = Dense(256, activation='tanh')(G_out)
+    G_out = Dense(res, activation='tanh')(G_out)
     G_out = Add()([G_in_decay, G_out])
-    G_out = Lambda(divide, output_shape=(256,))(G_out)
+    G_out = Lambda(divide, output_shape=(res,))(G_out)
     G = Model(inputs=[G_in_decay, G_in_irf], outputs=G_out)
     G.compile(loss='mse', optimizer='adam')
     return G, G_out
 
 def get_discriminative(D_in_decay):
+    '''
+    This function generate the discriminative model.
+    Input:
+        D_in_decay : D input tensor for decay histogram
+    Output:
+        D          : Discriminative model
+        D_out      : D output tensor
+    '''
     decay = Dense(128, activation='sigmoid')(D_in_decay)
     D_out =  Dense(64, activation='sigmoid')(decay)
     D_out =  Dense(8, activation='sigmoid')(D_out)
@@ -143,6 +200,15 @@ def get_discriminative(D_in_decay):
     return D, D_out
 
 def get_estimative(E_in_decay, E_in_irf):
+    '''
+    This function generate the estimative model.
+    Input:
+        E_in_decay : E input tensor for decay histogram
+        E_in_irf   : E input tensor for irf
+    Output:
+        E          : Estimatve model
+        E_out      : E output tensor
+    '''
     decay = Dense(128, activation='sigmoid')(E_in_decay)
     irf   = Dense(64, activation='sigmoid')(E_in_irf)
     denseInput = Concatenate()([decay, irf])
@@ -161,11 +227,26 @@ def get_estimative(E_in_decay, E_in_irf):
     return E, E_out
 
 def set_trainability(model, trainable=False):
+    '''
+    This function is ustilized to set the trainability of the model.
+    '''
     model.trainable = trainable
     for layer in model.layers:
         layer.trainable = trainable
 
 def make_gan(GAN_in_decay, GAN_in_irf, G, D):
+    '''
+    This function generate the GAN model.
+    Input:
+        GAN_in_decay   : GAN input tensor for decay histogram
+        GAN_in_irf     : GAN input tensor for irf
+        G              : generative model
+        D              : discrimative model
+    Output:
+        GAN            : GAN model
+        GAN_out        : GAN output tensor
+        generator_model: GAN model with additional output (G-output)
+    '''
     set_trainability(D, False)
     x = G([GAN_in_decay, GAN_in_irf])
     GAN_out = D(x)
@@ -180,45 +261,35 @@ def make_gan(GAN_in_decay, GAN_in_irf, G, D):
                 loss_weights=[1, 500])
     return GAN, GAN_out, generator_model
 
-def make_flimGANE(GAN_in_decay, GAN_in_irf, G, D):
+def make_flimGANE(GAN_in_decay, GAN_in_irf, G, E):
+    '''
+    This function generate the flimGANE model.
+    Input:
+        GAN_in_decay   : GAN input tensor for decay histogram
+        GAN_in_irf     : GAN input tensor for irf
+        G              : generative model
+        E              : estimative model
+    Output:
+        flimGANE       : GAN model
+        flimGANE_out   : GAN output tensor
+    '''
     set_trainability(D, True)
     set_trainability(G, False)
     x = G([GAN_in_decay, GAN_in_irf])
-    GAN_out = D([x, GAN_in_irf])
-    GAN = Model([GAN_in_decay, GAN_in_irf], GAN_out)
-    GAN.compile(loss='mse', optimizer='adam')
-    return GAN, GAN_out
+    flimGANE_out = D([x, GAN_in_irf])
+    flimGANE = Model([GAN_in_decay, GAN_in_irf], flimGANE_out)
+    flimGANE.compile(loss='mse', optimizer='adam')
+    return flimGANE, flimGANE_out
 
-def sample_images(realinput, fakeinput, irf, epoch, G, r, c):
 
-    x = fakeinput
-    x_img = G.predict([x, irf])
-    y = realinput
-    t = np.linspace(0, 50, 256)
-    
-    fig, axs = plt.subplots(r, c, figsize=(75,30))
-    cnt = 0
-    for i in range(r):
-        for j in range(c):
-            axs[i,j].plot(t, y[cnt, :], 'r', lw=7.5, label='High-count decay')
-            axs[i,j].plot(t, x_img[cnt, :], 'bo--', markersize=15, label='Low-count decay')
-            axs[i,j].legend()
-            axs[i,j].set_ylim([-0.6, 1.2])
-            cnt += 1
-    
-    saveFolder = workdir + "/Results/ver_" + version 
-    if not os.path.exists(saveFolder):
-        os.makedirs(saveFolder)
-    fig.savefig(saveFolder + "/decayHistogram_%d.png" % epoch)
-    plt.close()
-
+# -------------------------------
 #%% Main code start here
+# -------------------------------
 
 #%% Start with generative model training
-# Load the data set (This data is simulated based on IRF experiments for each pixel)
-sim_filename = '/Simulation_version2_hela_090_500_100dups_test.pkl'
+# Load the data set 
+sim_filename = '/Example_SimDataset.pkl'
 dataset = pd.read_pickle(workdir + sim_filename)
-res = 256
 Xtrain = np.reshape(dataset['TimeDecayHistogram'][0], (-1, res))
 IRF = np.reshape(dataset['IRF'][0], (-1, res))
 FLIMA = np.reshape(dataset['FLIM_A'][0], (-1, 1))
@@ -254,21 +325,6 @@ generator_loss = []
 n_critic = 5
 clip_value = 0.01
 e_range= range(epochs)
-
-r, c = 3, 3
-n_images = r * c
-realinput_demo, fakeinput_demo, valid_demo, fake_demo, irf_demo, A_demo, tau1_demo, tau2_demo = generate_training_data(Xtrain, IRF, FLIMA, FLIMTau1, FLIMTau2, n_images)
-# Create the new folder if not existed
-saveFolder = workdir + "/Results/ver_" + version 
-if not os.path.exists(saveFolder):
-    os.makedirs(saveFolder)
-# Save what are the selected simulated dataset from demo
-np.save(saveFolder + "/realinput_demo.npy", realinput_demo) 
-np.save(saveFolder + '/fakeinput_demo.npy', fakeinput_demo)
-np.save(saveFolder + '/irf_demo.npy', irf_demo) 
-np.save(saveFolder + '/A_demo.npy', A_demo) 
-np.save(saveFolder + '/tau1_demo.npy', tau1_demo)
-np.save(saveFolder + '/tau2_demo.npy', tau2_demo) 
 
 # Train the model
 for epoch in e_range:
@@ -307,23 +363,7 @@ for epoch in e_range:
     if verbose and (epoch+1) % v_freq == 0:  # Show current progress for certain epochs
         print("Epoch #{}: Generative Loss: {}, Discriminative Loss: {}".format(epoch+1, g_loss[-1], d_loss[-1]))
         print("Epoch #{}: Generator's Loss: {}".format(epoch+1, generator_loss[-1]))
-
-    if epoch % v_freq == 0:
-        # Plot the demo and save the figure every v_freq epochs
-        sample_images(realinput_demo, fakeinput_demo, irf_demo, epoch, G, r, c)
         
-    if (epoch+1) % 100 == 0:
-        # Save the model and results every 100 epochs
-        G_name = 'WGAN_G_model_ver' + version + '_epoch' + str(epoch+1) + '.h5' 
-        D_name = 'WGAN_D_model_ver' + version + '_epoch' + str(epoch+1) + '.h5' 
-        GAN_name = 'WGAN_model_ver' + version + '_epoch' + str(epoch+1) + '.h5' 
-        G.save(savepath + G_name) 
-        D.save(savepath + D_name) 
-        GAN.save(savepath + GAN_name)
-        np.save(savepath + 'g_loss_ver' + version + '_epoch' + str(epoch+1) + '.npy', g_loss) 
-        np.save(savepath + 'd_loss_ver' + version + '_epoch' + str(epoch+1) + '.npy', d_loss)
-        np.save(savepath + 'generator_loss_ver' + version + '_epoch' + str(epoch+1) + '.npy', generator_loss)
-
 # Save the model and results
 G_name = 'WGAN_G_model_ver' + version + '.h5' 
 D_name = 'WGAN_D_model_ver' + version + '.h5' 
@@ -336,15 +376,14 @@ np.save(savepath + 'd_loss_ver' + version + '.npy', d_loss)
 np.save(savepath + 'generator_loss_ver' + version + '.npy', generator_loss)
 
 #%% Start with estimative model training
-# Load the IRF --> avg and normalize
-irfFileName = '/irf.tif'
+irfFileName = '/Example_IRF.tif'
 irf = io.imread(workdir + irfFileName)
 avgIRF = np.sum(np.sum(irf, axis=1), axis=1)
 avgIRF = avgIRF / np.max(avgIRF)
 # Use the same simulation parameters as you did for the previous generative model training
-tau1s = np.linspace(0.9, 5.0, 42)
+tau1s = np.linspace(0.3, 6.0, 58)
 tau2s = [0.5]
-alphas = [0.98, 0.99, 1.00]
+alphas = [0.99, 1.00]
 n_decays = len(tau1s) * len(tau2s) * len(alphas)
 histograms = np.zeros((n_decays, res))
 IRF = np.zeros((n_decays, res))
@@ -374,26 +413,21 @@ epochs = 5000
 verbose = True
 v_freq = 10
 
-tic = time.clock()
 for epoch in range(epochs):
     print("Epoch #{}.......".format(epoch+1))    
     e_loss.append(E.train_on_batch([histograms, IRF], [FLIMA, FLIMtau1, FLIMtau2]))
-    if verbose and (epoch+1) % v_freq == 0:  # Show current progress for certain epochs
+    if verbose and (epoch+1) % v_freq == 0:  
         print("Epoch #{}: Discriminative Loss: {}".format(epoch+1, e_loss[-1]))
-toc = time.clock()
-elapseTime = toc = tic
 
 # Assign the version to be saved and save the results
-savepath = workdir + "/Results/"
 E_name = 'E_model_ver' + version + '.h5' 
 E.save(savepath + E_name) 
 np.save(savepath + 'e_loss_ver' + version + '.npy', e_loss)
 
 #%% Start flimGANE combinative training
 # First, load the dataset if you haven't
-sim_filename = '/Simulation_version2_hela_090_500_100dups_test.pkl'
-dataset = pd.read_pickle(workdir + sim_filename)
-res = 256
+# sim_filename = '/Example_SimDataset.pkl'
+# dataset = pd.read_pickle(workdir + sim_filename)
 Xtrain = np.reshape(dataset['TimeDecayHistogram'][0], (-1, res))
 IRF = np.reshape(dataset['IRF'][0], (-1, res))
 FLIMA = np.reshape(dataset['FLIM_A'][0], (-1, 1))
@@ -403,8 +437,8 @@ for i in range(np.shape(IRF)[0]):
     IRF[i, :] = IRF[i, :]/np.max(IRF[i, :])
 
 # Load the model
-G = load_model(workdir + '/Example_generator.h5', custom_objects=dict(wasserstein_loss=wasserstein_loss))
-E = load_model(workdir + '/Example_estimator.h5')
+#G = load_model(workdir + '/Example_generator.h5', custom_objects=dict(wasserstein_loss=wasserstein_loss))
+#E = load_model(workdir + '/Example_estimator.h5')
 E.name = 'model_2_new'
 
 # Chained model (Combine generator and discriminator together)
@@ -433,7 +467,6 @@ tau2_train = FLIMTau2[train_ind]
 irf_train  = IRF[train_ind, :]
 X_train_train    = Xtrain[train_ind, :]   
  
-tic = time.clock()
 for epoch in e_range:
     
     print("Epoch #" + str(epoch+1) + " .......")
@@ -452,17 +485,6 @@ for epoch in e_range:
         print("Epoch #{}-{}: Generative Loss: {}".format(epoch+1, crit+1, gan_loss[-1]))
         print("Epoch #{}-{}: Generative TestLoss: {}".format(epoch+1, crit+1, gan_val[-1]))
               
-    G_name = '/flimGANE_G_model_ver' + version + '_iter_' + str(epoch) + '.h5' 
-    E_name = '/flimGANE_E_model_ver' + version + '_iter_' + str(epoch) + '.h5' 
-    flimGANE_name = '/flimGANE_model_ver' + version + '_iter_' + str(epoch) + '.h5' 
-    G.save(savepath + G_name) 
-    E.save(savepath + E_name) 
-    flimGANE.save(savepath + flimGANE_name)
-    np.save(savepath + '/flimgane_g_loss_ver' + version + '_iter_' + str(epoch) + '.npy', gan_loss) 
-    np.save(savepath + '/flimgane_g_valloss_ver' + version + '_iter_' + str(epoch) + '.npy', gan_val) 
-
-toc = time.clock()
-elapseTime = toc - tic
 
 # Save the model and results
 G_name = 'flimGANE_G_model_ver' + version + '.h5' 
@@ -473,3 +495,53 @@ E.save(savepath + E_name)
 flimGANE.save(savepath + flimGANE_name)
 np.save(savepath + 'flimgane_g_loss_ver' + version + '.npy', gan_loss) 
 np.save(savepath + 'flimgane_g_valloss_ver' + version + '.npy', gan_val) 
+
+
+#%% flimGANE prediction
+# Load the dataset
+
+# ================================================================
+irffilename = workdir + "/Example_IRF.tif"
+decayfilename = workdir + "/Example_Decay.tif"
+flimGANEfilename = workdir + "/Example_flimGANE.h5"
+# ================================================================
+
+# IRF
+irf = io.imread(irffilename)
+avgirf = np.mean(np.mean(irf, axis=1), axis=1)    
+avgirf = avgirf / np.max(avgirf)
+dimx = irf.shape[1]
+dimy = irf.shape[2]  
+for dx, dy in itertools.product(range(dimx), range(dimy)):
+    irf[:, dx, dy] = avgirf
+    
+# Decay curve
+decay_   = io.imread(decayfilename)
+intensity   = np.sum(decay_, axis=-1)
+
+# flimGANE model
+flimGANE = load_model(flimGANEfilename, 
+                      custom_objects=dict(wasserstein_loss=wasserstein_loss)) 
+
+# flimGANE prediction
+threshold = 0
+X = np.reshape(decay_, (res, -1))
+X = X.T
+IRF = np.reshape(irf, (res, -1))
+IRF = IRF.T
+prediction = flimGANE.predict([X, IRF])
+A, tau1, tau2 = prediction
+flimGANE_FLIM = A*tau1 + (1-A)*tau2
+flimGANE_FLIM = np.reshape(flimGANE_FLIM, (512, 512))
+flimGANE_FLIM[intensity < threshold] = 0
+
+# Visualize the flimGANE result image
+fig, ax  = plt.subplots(figsize=(9, 9))
+image    = ax.imshow(flimGANE_FLIM, cmap=plt.get_cmap('CMRmap'))
+image.set_clim([0, 6])
+plt.xticks([])
+plt.yticks([])
+divider = make_axes_locatable(ax)
+cax = divider.append_axes('right', size='10%', pad=0.1)
+fig.colorbar(image, cax=cax, orientation="vertical")
+plt.tight_layout()
