@@ -13,7 +13,7 @@ We have developed a simple version of GUI for demonstration, which can be downlo
 Contact
 ----------------------------------------------------
 
-File any issues with the [issue tracker](https://github.com/NinaYIC/flimGANE/issues). For acy questions or problems, this code is maintained by [@NinaYIC](https://github.com/NinaYIC).
+File any issues with the [issue tracker](https://github.com/NinaYIC/flimGANE/issues). For acy questions or problems, this code is maintained by [@NinaYIC](https://github.com/NinaYIC) and [@DerekYJC](https://github.com/DerekYJC).
 
 ## Reference
 
