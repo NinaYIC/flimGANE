@@ -7,7 +7,7 @@ This code implements the model from the paper "[Generative adversarial network e
 Getting started
 ----------------------------------------------------
 
-We have developed a simple version of GUI for demonstration, which can be downloaded [here](https://figshare.com/articles/dataset/Example_App_for_Chen_et_al_Communications_Biology/23659899). 
+We have developed a simple version of GUI for demonstration, which can be obtained upon reasonable request.
 
 
 Contact
